@@ -14,6 +14,14 @@ from prefxplain.renderer import render, render_matrix
 runner = CliRunner()
 
 
+def generated_artifact(project: Path, ext: str = ".html") -> Path:
+    marker = project / ".prefxplain" / "latest"
+    assert marker.exists()
+    version = marker.read_text(encoding="utf-8").strip()
+    assert version
+    return project / ".prefxplain" / version / f"prefxplain{ext}"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -54,7 +62,7 @@ class TestFormatOptions:
             app, ["create", str(py_project), "--no-descriptions", "--no-open", "--format", "mermaid"]
         )
         assert result.exit_code == 0, result.output
-        md = py_project / "prefxplain.md"
+        md = generated_artifact(py_project, ".md")
         assert md.exists()
         content = md.read_text()
         assert "```mermaid" in content
@@ -65,7 +73,7 @@ class TestFormatOptions:
             app, ["create", str(py_project), "--no-descriptions", "--no-open", "--format", "dot"]
         )
         assert result.exit_code == 0, result.output
-        dot_file = py_project / "prefxplain.dot"
+        dot_file = generated_artifact(py_project, ".dot")
         assert dot_file.exists()
         content = dot_file.read_text()
         assert "digraph" in content
@@ -75,7 +83,7 @@ class TestFormatOptions:
             app, ["create", str(py_project), "--no-descriptions", "--no-open", "--format", "matrix"]
         )
         assert result.exit_code == 0, result.output
-        html = py_project / "prefxplain.html"
+        html = generated_artifact(py_project, ".html")
         assert html.exists()
         content = html.read_text()
         assert "Matrix" in content

@@ -41,9 +41,10 @@ class PreviewRequestHandler(SimpleHTTPRequestHandler):
         root_dir: str | Path | None = None,
         **kwargs: object,
     ) -> None:
-        resolved_root = Path(root_dir or directory or ".").resolve()
+        static_dir = Path(directory or root_dir or ".").resolve()
+        resolved_root = Path(root_dir or static_dir).resolve()
         self._root_dir = resolved_root
-        super().__init__(*args, directory=str(resolved_root), **kwargs)
+        super().__init__(*args, directory=str(static_dir), **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib method name
         parsed = urlparse(self.path)
@@ -118,12 +119,17 @@ class PreviewRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def serve_preview(directory: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
-    """Serve a repo root with editor save/load endpoints."""
+def serve_preview(
+    directory: Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    root_dir: Path | None = None,
+) -> None:
+    """Serve generated docs with editor save/load endpoints rooted at the repo."""
     handler = partial(
         PreviewRequestHandler,
         directory=str(directory.resolve()),
-        root_dir=directory.resolve(),
+        root_dir=(root_dir or directory).resolve(),
     )
     with ThreadingHTTPServer((host, port), handler) as server:
         try:

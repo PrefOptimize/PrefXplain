@@ -21,8 +21,21 @@ from .exporter import export_agent_context
 from .graph import Graph
 
 
+def _default_graph_json_path(root: Path) -> Path:
+    marker = root / ".prefxplain" / "latest"
+    try:
+        version = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        version = ""
+    if version and "/" not in version and "\\" not in version:
+        candidate = root / ".prefxplain" / version / "prefxplain.json"
+        if candidate.exists():
+            return candidate
+    return root / "prefxplain.json"
+
+
 def _load_graph(root: Path, from_json: Path | None = None) -> Graph:
-    json_path = from_json or (root / "prefxplain.json")
+    json_path = from_json or _default_graph_json_path(root)
     if not json_path.exists():
         raise FileNotFoundError(
             f"prefxplain.json not found at {json_path}. "

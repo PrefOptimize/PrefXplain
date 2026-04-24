@@ -209,7 +209,7 @@ function handleWebviewMessage(
   const reply = (payload: Record<string, unknown>): void => {
     panel.webview.postMessage({ id: m.id, ...payload });
   };
-  const rootDir = path.dirname(htmlPath);
+  const rootDir = inferWorkspaceRootForHtmlPath(htmlPath);
 
   if (m.type === "prefxplain:load-file") {
     const target = resolveSafeChildPath(rootDir, m.path || "");
@@ -367,8 +367,7 @@ function setupWatcher(htmlPath: string): void {
 }
 
 /**
- * Resolve prefxplain.html when the URI or default path is wrong (common case:
- * workspace opened on `repo/prefxplain` while HTML is at `repo/prefxplain.html`).
+ * Resolve prefxplain.html when the URI or default path is wrong.
  */
 async function resolvePrefxplainHtmlPath(
   requested: string
@@ -382,6 +381,13 @@ async function resolvePrefxplainHtmlPath(
     return undefined;
   }
 
+  const latestNearRequest = resolveGeneratedHtmlPathSync(
+    inferWorkspaceRootForHtmlPath(normalizedPath)
+  );
+  if (latestNearRequest && fs.existsSync(latestNearRequest)) {
+    return latestNearRequest;
+  }
+
   // .../repo/prefxplain/prefxplain.html -> .../repo/prefxplain.html
   const grandparent = path.dirname(path.dirname(normalizedPath));
   const oneLevelUp = path.join(grandparent, "prefxplain.html");
@@ -390,6 +396,11 @@ async function resolvePrefxplainHtmlPath(
   }
 
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const generated = resolveGeneratedHtmlPathSync(folder.uri.fsPath);
+    if (generated && fs.existsSync(generated)) {
+      return generated;
+    }
+
     const atRoot = path.join(folder.uri.fsPath, "prefxplain.html");
     if (fs.existsSync(atRoot)) {
       return atRoot;
@@ -426,7 +437,7 @@ async function openPreview(htmlPath: string): Promise<void> {
 
   if (!fs.existsSync(normalizedPath)) {
     vscode.window.showErrorMessage(
-      `PrefXplain: file not found: ${path.resolve(htmlPath)}. Run prefxplain from the repository root so it writes prefxplain.html there, or open the repo folder (not only the prefxplain/ package) in the IDE.`
+      `PrefXplain: file not found: ${path.resolve(htmlPath)}. Run prefxplain from the repository root so it writes .prefxplain/<version>/prefxplain.html, or open the repo folder in the IDE.`
     );
     return;
   }
@@ -453,6 +464,40 @@ async function openPreview(htmlPath: string): Promise<void> {
 function toHtmlPath(input?: string | vscode.Uri): string | undefined {
   if (!input) return undefined;
   return typeof input === "string" ? input : input.fsPath;
+}
+
+function inferWorkspaceRootForHtmlPath(htmlPath: string): string {
+  const htmlDir = path.dirname(path.resolve(htmlPath));
+  const maybeArtifactRoot = path.dirname(htmlDir);
+  if (path.basename(maybeArtifactRoot) === ".prefxplain") {
+    return path.dirname(maybeArtifactRoot);
+  }
+  return htmlDir;
+}
+
+function resolveGeneratedHtmlPathSync(workspaceRoot: string): string | undefined {
+  const artifactRoot = path.join(workspaceRoot, ".prefxplain");
+  const marker = path.join(artifactRoot, "latest");
+
+  try {
+    const version = fs.readFileSync(marker, "utf-8").trim();
+    if (version && !version.includes("/") && !version.includes("\\")) {
+      const candidate = path.join(artifactRoot, version, "prefxplain.html");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // No generated docs yet.
+  }
+
+  const legacyRoot = path.join(workspaceRoot, "prefxplain.html");
+  if (fs.existsSync(legacyRoot)) {
+    return legacyRoot;
+  }
+
+  const workingTree = path.join(artifactRoot, "working-tree", "prefxplain.html");
+  return fs.existsSync(workingTree) ? workingTree : undefined;
 }
 
 type GenerateSettings = {
@@ -557,7 +602,9 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!htmlPath) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
           if (workspaceFolder) {
-            htmlPath = path.join(workspaceFolder.uri.fsPath, "prefxplain.html");
+            htmlPath =
+              resolveGeneratedHtmlPathSync(workspaceFolder.uri.fsPath) ??
+              path.join(workspaceFolder.uri.fsPath, "prefxplain.html");
           }
         }
 
@@ -611,7 +658,10 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      await openPreview(path.join(workspaceRoot, "prefxplain.html"));
+      await openPreview(
+        resolveGeneratedHtmlPathSync(workspaceRoot) ??
+          path.join(workspaceRoot, "prefxplain.html")
+      );
       vscode.window.showInformationMessage("PrefXplain: diagram generated.");
     })
   );

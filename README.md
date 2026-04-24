@@ -37,6 +37,10 @@ The installer sets everything up automatically — slash commands, IDE preview e
 PATH entry. Re-run the same command to upgrade. For Codex (project-local), run
 `prefxplain setup codex` inside each repo.
 
+On Windows, run the installer in WSL. Setup also drops a Windows `prefxplain.cmd`
+shim into `%LOCALAPPDATA%\Microsoft\WindowsApps` and mirrors Claude Code/Cursor
+commands into the Windows profile when those tools are detected there.
+
 > **Inside your AI coding tool?** Paste the line above and the agent runs it for you.
 
 ## Local dev install (from this repo)
@@ -83,6 +87,8 @@ Open your AI coding tool inside any repo and type:
 The agent reads your files, groups them into architectural blocks, writes a short
 description for each, and opens an interactive diagram in an IDE preview tab.
 First run on a medium repo: ~2 minutes. Re-runs: seconds (descriptions are cached).
+Generated files are kept out of the project root under `.prefxplain/<git-commit>/`,
+with `.prefxplain/latest` pointing at the most recent run.
 
 **No API key.** The agent runs inside your existing session — your subscription already
 covers it. For CI or headless use, set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` and use
@@ -108,8 +114,8 @@ Not a generic diagram, the real shape of the code.*
 *Press Space on any block to open the source file in an inline editor — read the code,
 fix a bug, tweak a description — without leaving the diagram.*
 
-Everything is in a single self-contained HTML file. No server, no CDN, no JavaScript
-dependencies, no upload. Safe to share with anyone.
+The diagram itself is a single self-contained HTML file inside `.prefxplain/`.
+No CDN, no upload. Safe to share with anyone.
 
 ## Integrations
 
@@ -129,6 +135,8 @@ If you don't use a coding agent, the CLI works standalone — set an API key and
 prefxplain create .                    # analyze + open
 prefxplain update .                    # re-analyze, preserve descriptions
 prefxplain create . --no-descriptions  # offline, no LLM, still useful
+prefxplain serve .                     # serve .prefxplain/latest locally
+prefxplain serve . --version abc123    # serve a specific generated version
 prefxplain check .                     # CI: fail on circular deps
 prefxplain mcp .                       # MCP server for AI agents
 prefxplain upgrade                     # pull the latest release from GitHub main
@@ -153,7 +161,7 @@ prefxplain setup codex   # per-repo
 
 | Flag | Default | Description |
 |---|---|---|
-| `--output`, `-o` | `./prefxplain.html` | Output path |
+| `--output`, `-o` | `.prefxplain/<commit>/prefxplain.html` | Output path |
 | `--format` | `html` | `html`, `matrix`, `mermaid`, `dot` |
 | `--no-descriptions` | false | Skip LLM step |
 | `--api-key` | env | Override API key |
@@ -167,6 +175,9 @@ prefxplain setup codex   # per-repo
 | `--filter` | — | Glob filter (e.g. `src/**/*.py`) |
 | `--focus` / `--depth` | — | Depth-limited view around a file |
 | `--level`, `-l` | `newbie` | Audience voice: `newbie`, `middle`, `strong`, `expert` |
+
+`prefxplain serve` serves `.prefxplain/latest` by default; pass `--version <hash>`
+to inspect an older generated commit directory.
 
 </details>
 

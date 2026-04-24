@@ -43,6 +43,95 @@ app = typer.Typer(
 
 console = Console()
 
+ARTIFACT_DIRNAME = ".prefxplain"
+ARTIFACT_BASENAME = "prefxplain"
+LATEST_MARKER = "latest"
+WORKING_TREE_VERSION = "working-tree"
+
+
+def _git_commit_id(root: Path) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    commit = result.stdout.strip()
+    return commit or None
+
+
+def _artifact_version(root: Path) -> str:
+    return _git_commit_id(root) or WORKING_TREE_VERSION
+
+
+def _artifact_root(root: Path) -> Path:
+    return root / ARTIFACT_DIRNAME
+
+
+def _artifact_dir(root: Path, version: Optional[str] = None) -> Path:
+    return _artifact_root(root) / (version or _artifact_version(root))
+
+
+def _default_output_path(root: Path, ext: str) -> Path:
+    return _artifact_dir(root) / f"{ARTIFACT_BASENAME}{ext}"
+
+
+def _latest_marker_path(root: Path) -> Path:
+    return _artifact_root(root) / LATEST_MARKER
+
+
+def _valid_artifact_version(value: str) -> bool:
+    return bool(value) and "/" not in value and "\\" not in value and value not in {".", ".."}
+
+
+def _write_latest_marker(root: Path, artifact_dir: Path) -> None:
+    marker = _latest_marker_path(root)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{artifact_dir.name}\n", encoding="utf-8")
+
+
+def _read_latest_version(root: Path) -> Optional[str]:
+    try:
+        version = _latest_marker_path(root).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return version if _valid_artifact_version(version) else None
+
+
+def _latest_artifact_dir(root: Path) -> Optional[Path]:
+    version = _read_latest_version(root)
+    if version:
+        candidate = _artifact_dir(root, version)
+        if candidate.is_dir():
+            return candidate
+    current = _artifact_dir(root)
+    return current if current.is_dir() else None
+
+
+def _latest_artifact_path(root: Path, ext: str) -> Optional[Path]:
+    latest_dir = _latest_artifact_dir(root)
+    if not latest_dir:
+        return None
+    candidate = latest_dir / f"{ARTIFACT_BASENAME}{ext}"
+    return candidate if candidate.exists() else None
+
+
+def _default_graph_json_path(root: Path) -> Path:
+    return _latest_artifact_path(root, ".json") or (root / f"{ARTIFACT_BASENAME}.json")
+
+
+def _resolve_served_artifact_dir(root: Path, version: Optional[str]) -> Optional[Path]:
+    if version:
+        if not _valid_artifact_version(version):
+            return None
+        return _artifact_dir(root, version)
+    return _latest_artifact_dir(root) or _artifact_dir(root)
+
 
 def _print_codex_project_note() -> None:
     console.print(
@@ -113,6 +202,77 @@ def _open_output(path: Path) -> None:
     webbrowser.open(f"file://{resolved}")
 
 
+def _is_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _windows_user_profile_from_wsl() -> Optional[Path]:
+    if not _is_wsl() or not shutil.which("cmd.exe") or not shutil.which("wslpath"):
+        return None
+    try:
+        raw = subprocess.run(
+            ["cmd.exe", "/C", "echo %USERPROFILE%"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if raw.returncode != 0:
+        return None
+    windows_path = raw.stdout.strip().strip('"')
+    if not windows_path or "%" in windows_path:
+        return None
+    try:
+        converted = subprocess.run(
+            ["wslpath", "-u", windows_path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if converted.returncode != 0:
+        return None
+    profile = converted.stdout.strip()
+    return Path(profile) if profile else None
+
+
+def _cmd_quote(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _prefxplain_executable_for_wsl() -> str:
+    candidate = Path(sys.executable).with_name("prefxplain")
+    if candidate.exists():
+        return str(candidate)
+    return shutil.which("prefxplain") or str(candidate)
+
+
+def _install_windows_shim_from_wsl(windows_profile: Optional[Path]) -> Optional[str]:
+    if not windows_profile:
+        return None
+    shim_dir = windows_profile / "AppData" / "Local" / "Microsoft" / "WindowsApps"
+    shim_path = shim_dir / "prefxplain.cmd"
+    distro = os.environ.get("WSL_DISTRO_NAME", "").strip()
+    args = ["wsl.exe"]
+    if distro:
+        args.extend(["-d", distro])
+    args.extend(["--", _prefxplain_executable_for_wsl()])
+    command = " ".join(_cmd_quote(arg) for arg in args)
+    try:
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        shim_path.write_text(f"@echo off\r\n{command} %*\r\n", encoding="utf-8")
+    except OSError:
+        return None
+    return f"Windows PATH shim (WSL): {shim_path}"
+
+
 def _version_callback(value: bool) -> None:
     if value:
         typer.echo(f"prefxplain {__version__}")
@@ -147,7 +307,7 @@ def create(
         None,
         "--output",
         "-o",
-        help="Output HTML file path. Defaults to <root>/prefxplain.html.",
+        help="Output file path. Defaults to <root>/.prefxplain/<commit>/prefxplain.<ext>.",
     ),
     no_descriptions: bool = typer.Option(
         False,
@@ -303,7 +463,7 @@ def update(
         None,
         "--output",
         "-o",
-        help="Output HTML file path. Defaults to <root>/prefxplain.html.",
+        help="Output HTML file path. Defaults to <root>/.prefxplain/<commit>/prefxplain.html.",
     ),
     no_descriptions: bool = typer.Option(
         False,
@@ -472,14 +632,14 @@ def context_cmd(
     from_json: Optional[Path] = typer.Option(
         None,
         "--from",
-        help="Load from prefxplain.json (default: <root>/prefxplain.json).",
+        help="Load from prefxplain.json (default: <root>/.prefxplain/latest target, fallback <root>/prefxplain.json).",
     ),
     max_files: int = typer.Option(500, "--max-files"),
 ) -> None:
     """Output token-efficient context for AI agents. Loads from prefxplain.json when available."""
     from .exporter import export_agent_context
 
-    json_path = from_json or (root / "prefxplain.json")
+    json_path = from_json or _default_graph_json_path(root)
     if json_path.exists():
         from .graph import Graph as _Graph
         graph = _Graph.load(json_path)
@@ -504,12 +664,67 @@ def mcp_cmd(
     from_json: Optional[Path] = typer.Option(
         None,
         "--from",
-        help="Load from prefxplain.json (default: <root>/prefxplain.json).",
+        help="Load from prefxplain.json (default: <root>/.prefxplain/latest target, fallback <root>/prefxplain.json).",
     ),
 ) -> None:
     """Start MCP stdio server for AI agent integration. Requires the `mcp` package: `~/.prefxplain/.venv/bin/pip install 'mcp>=1.0'`."""
     from .mcp_server import serve
-    serve(root, from_json)
+    serve(root, from_json or _default_graph_json_path(root))
+
+
+@app.command(name="serve")
+def serve_cmd(
+    root: Path = typer.Argument(
+        Path("."),
+        help="Repository root whose generated docs should be served.",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+    version: Optional[str] = typer.Option(
+        None,
+        "--version",
+        help="Generated doc version to serve. Defaults to the .prefxplain/latest marker.",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Bind host.",
+    ),
+    port: int = typer.Option(
+        8765,
+        "--port",
+        "-p",
+        help="Bind port.",
+    ),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help="Open the served preview URL before blocking.",
+    ),
+) -> None:
+    """Serve the latest generated PrefXplain docs from .prefxplain/<version>."""
+    artifact_dir = _resolve_served_artifact_dir(root, version)
+    if not artifact_dir:
+        console.print(f"[red]Invalid PrefXplain doc version: {version}[/red]")
+        raise typer.Exit(1)
+
+    html_path = artifact_dir / f"{ARTIFACT_BASENAME}.html"
+    if not html_path.exists():
+        console.print(f"[red]Generated docs not found: {html_path}[/red]")
+        console.print("Run [bold]prefxplain create .[/bold] first, or pass [bold]--version[/bold].")
+        raise typer.Exit(1)
+
+    url = f"http://{host}:{port}/{ARTIFACT_BASENAME}.html"
+    console.print(f"[bold]Serving PrefXplain docs[/bold] from [cyan]{artifact_dir}[/cyan]")
+    console.print(f"[dim]{url}[/dim]")
+    if open_browser and not _open_uri(url):
+        webbrowser.open(url)
+
+    from .preview_server import serve_preview
+
+    serve_preview(artifact_dir, host=host, port=port, root_dir=root)
 
 
 @app.command(name="upgrade")
@@ -615,9 +830,24 @@ def setup_cmd(
     # Detect available tools
     detected: list[str] = []
     home = Path.home()
-    if (home / ".claude").is_dir() or shutil.which("claude"):
+    windows_profile = None if project else _windows_user_profile_from_wsl()
+    installed: list[str] = []
+    if not project:
+        shim_result = _install_windows_shim_from_wsl(windows_profile)
+        if shim_result:
+            installed.append(shim_result)
+
+    if (
+        (home / ".claude").is_dir()
+        or shutil.which("claude")
+        or (windows_profile is not None and (windows_profile / ".claude").is_dir())
+    ):
         detected.append("claude-code")
-    if (home / ".cursor").is_dir() or shutil.which("cursor"):
+    if (
+        (home / ".cursor").is_dir()
+        or shutil.which("cursor")
+        or (windows_profile is not None and (windows_profile / ".cursor").is_dir())
+    ):
         detected.append("cursor")
     codex_available = bool(shutil.which("codex"))
     if codex_available and project:
@@ -627,7 +857,6 @@ def setup_cmd(
     if (home / ".gemini").is_dir() or shutil.which("gemini"):
         detected.append("gemini")
 
-    installed: list[str] = []
     if not project:
         ext_result = _install_vscode_extension(package_root)
         if ext_result:
@@ -696,6 +925,31 @@ def setup_cmd(
                 )
                 installed.append(f"Claude Code ({scope}): {worker_dest}")
 
+            if not project and windows_profile is not None:
+                win_claude_root = windows_profile / ".claude"
+                win_commands_dir = win_claude_root / "commands"
+                win_agents_dir = win_claude_root / "agents"
+                win_commands_dir.mkdir(parents=True, exist_ok=True)
+
+                win_dest = win_commands_dir / "prefxplain.md"
+                win_dest.write_text(_load_cmd_content(), encoding="utf-8")
+                installed.append(f"Claude Code (Windows via WSL): {win_dest}")
+
+                update_body = _load_update_cmd_content()
+                if update_body is not None:
+                    win_update_dest = win_commands_dir / "prefxplain-update.md"
+                    win_update_dest.write_text(update_body, encoding="utf-8")
+                    installed.append(f"Claude Code (Windows via WSL): {win_update_dest}")
+
+                if claude_worker_source.exists():
+                    win_agents_dir.mkdir(parents=True, exist_ok=True)
+                    win_worker_dest = win_agents_dir / "prefxplain-worker.md"
+                    win_worker_dest.write_text(
+                        claude_worker_source.read_text(encoding="utf-8"),
+                        encoding="utf-8",
+                    )
+                    installed.append(f"Claude Code (Windows via WSL): {win_worker_dest}")
+
         elif t == "cursor":
             # Cursor uses .cursor/rules/ for project-level instructions
             rules_dir = (
@@ -732,6 +986,28 @@ def setup_cmd(
                 )
                 update_dest.write_text(cursor_update, encoding="utf-8")
                 installed.append(f"Cursor ({scope}): {update_dest}")
+
+            if not project and windows_profile is not None:
+                win_rules_dir = windows_profile / ".cursor" / "rules"
+                win_rules_dir.mkdir(parents=True, exist_ok=True)
+
+                win_dest = win_rules_dir / "prefxplain.mdc"
+                win_dest.write_text(cursor_content, encoding="utf-8")
+                installed.append(f"Cursor (Windows via WSL): {win_dest}")
+
+                update_body = _load_update_cmd_content()
+                if update_body is not None:
+                    win_update_dest = win_rules_dir / "prefxplain-update.mdc"
+                    win_cursor_update = (
+                        "---\n"
+                        "description: Upgrade prefxplain itself to the latest GitHub main\n"
+                        "globs: \n"
+                        "alwaysApply: false\n"
+                        "---\n\n"
+                        + update_body
+                    )
+                    win_update_dest.write_text(win_cursor_update, encoding="utf-8")
+                    installed.append(f"Cursor (Windows via WSL): {win_update_dest}")
 
         elif t == "codex":
             # Codex uses AGENTS.md for project instructions. There is no global
@@ -1032,7 +1308,8 @@ def _run(
         "dot": ".dot",
     }
     ext = default_ext.get(fmt, ".html")
-    output_path = output or (root / f"prefxplain{ext}")
+    default_output = output is None
+    output_path = output or _default_output_path(root, ext)
 
     console.print(
         Panel(
@@ -1091,7 +1368,9 @@ def _run(
     # --no-descriptions never silently wipes descriptions from a previous run.
     # BUT: if the requested audience level differs from the prior run's level,
     # skip preservation so the new voice actually takes effect.
-    prior_json_path = (output or (root / f"prefxplain{ext}")).with_suffix(".json")
+    prior_json_path = output_path.with_suffix(".json")
+    if default_output and not prior_json_path.exists():
+        prior_json_path = _latest_artifact_path(root, ".json") or prior_json_path
     prior_level = ""
     if prior_json_path.exists():
         try:
@@ -1222,6 +1501,7 @@ def _run(
 
     # Step 3: Render output
     console.print(f"[bold blue]3/3[/bold blue] Rendering {fmt} output...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "matrix":
         render_matrix(graph, output_path=output_path)
@@ -1243,6 +1523,8 @@ def _run(
     json_path = output_path.with_suffix(".json")
     graph.save(json_path)
     console.print(f"    [green]\u2713[/green] Graph data at [cyan]{json_path}[/cyan]")
+    if default_output:
+        _write_latest_marker(root, output_path.parent)
 
     # Print metrics summary
     metrics = graph.metrics()
@@ -1270,7 +1552,20 @@ def entry_point() -> None:
     `prefxplain create .`.
     """
     args = sys.argv[1:]
-    subcommands = {"create", "update", "upgrade", "check", "context", "mcp", "setup", "--help", "-h", "--version", "-v"}
+    subcommands = {
+        "create",
+        "update",
+        "upgrade",
+        "check",
+        "context",
+        "mcp",
+        "serve",
+        "setup",
+        "--help",
+        "-h",
+        "--version",
+        "-v",
+    }
     if args and args[0] not in subcommands:
         sys.argv.insert(1, "create")
     app()

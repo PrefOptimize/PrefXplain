@@ -28,6 +28,14 @@ def py_project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def generated_artifact(project: Path, ext: str = ".html") -> Path:
+    marker = project / ".prefxplain" / "latest"
+    assert marker.exists()
+    version = marker.read_text(encoding="utf-8").strip()
+    assert version
+    return project / ".prefxplain" / version / f"prefxplain{ext}"
+
+
 # ---------------------------------------------------------------------------
 # Create command
 # ---------------------------------------------------------------------------
@@ -44,8 +52,10 @@ class TestCreateCommand:
     def test_create_produces_html(self, py_project: Path) -> None:
         result = runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
         assert result.exit_code == 0, result.output
-        assert (py_project / "prefxplain.html").exists()
-        assert (py_project / "prefxplain.json").exists()
+        assert generated_artifact(py_project, ".html").exists()
+        assert generated_artifact(py_project, ".json").exists()
+        assert not (py_project / "prefxplain.html").exists()
+        assert not (py_project / "prefxplain.json").exists()
 
     def test_create_custom_output(self, py_project: Path, tmp_path: Path) -> None:
         out = tmp_path / "custom.html"
@@ -94,12 +104,12 @@ class TestUpdateCommand:
     def test_update_after_create(self, py_project: Path) -> None:
         # First create
         runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
-        assert (py_project / "prefxplain.json").exists()
+        assert generated_artifact(py_project, ".json").exists()
 
         # Then update
         result = runner.invoke(app, ["update", str(py_project), "--no-descriptions", "--no-open"])
         assert result.exit_code == 0, result.output
-        assert (py_project / "prefxplain.html").exists()
+        assert generated_artifact(py_project, ".html").exists()
 
     def test_update_ignores_invalid_ollama_port_env_without_ollama(
         self, py_project: Path, monkeypatch: pytest.MonkeyPatch
@@ -110,6 +120,49 @@ class TestUpdateCommand:
         result = runner.invoke(app, ["update", str(py_project), "--no-descriptions", "--no-open"])
 
         assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# Serve command
+# ---------------------------------------------------------------------------
+
+
+class TestServeCommand:
+    def test_serve_help(self) -> None:
+        result = runner.invoke(app, ["serve", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--version" in result.output
+        assert "--port" in result.output
+
+    def test_serve_uses_latest_artifact(
+        self, py_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        create_result = runner.invoke(
+            app, ["create", str(py_project), "--no-descriptions", "--no-open"]
+        )
+        assert create_result.exit_code == 0, create_result.output
+
+        calls: list[tuple[Path, str, int, Path | None]] = []
+
+        def fake_serve_preview(
+            directory: Path,
+            host: str = "127.0.0.1",
+            port: int = 8765,
+            root_dir: Path | None = None,
+        ) -> None:
+            calls.append((directory, host, port, root_dir))
+
+        from prefxplain import preview_server
+
+        monkeypatch.setattr(cli_mod, "_open_uri", lambda _url: True)
+        monkeypatch.setattr(preview_server, "serve_preview", fake_serve_preview)
+
+        result = runner.invoke(app, ["serve", str(py_project), "--no-open"])
+
+        assert result.exit_code == 0, result.output
+        assert calls == [
+            (generated_artifact(py_project, ".html").parent, "127.0.0.1", 8765, py_project)
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +246,60 @@ class TestSetupCommand:
         assert result.exit_code == 0, result.output
         assert "Preview extension (VS Code): prefxplain-vscode-0.1.0.vsix" in result.output
         assert "No AI coding tools detected, so /prefxplain was not registered yet." in result.output
+
+    def test_setup_wsl_installs_windows_path_shim(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        package_root = tmp_path / "prefxplain"
+        windows_profile = tmp_path / "winuser"
+
+        monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+        monkeypatch.setattr(cli_mod.Path, "home", staticmethod(lambda: tmp_path / "linuxhome"))
+        monkeypatch.setattr(cli_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(cli_mod, "__file__", str(package_root / "cli.py"), raising=False)
+        monkeypatch.setattr(cli_mod, "_windows_user_profile_from_wsl", lambda: windows_profile)
+        monkeypatch.setattr(
+            cli_mod,
+            "_prefxplain_executable_for_wsl",
+            lambda: "/home/user/.prefxplain/.venv/bin/prefxplain",
+        )
+
+        result = runner.invoke(app, ["setup"])
+
+        shim = windows_profile / "AppData" / "Local" / "Microsoft" / "WindowsApps" / "prefxplain.cmd"
+        assert result.exit_code == 0, result.output
+        assert shim.exists()
+        assert 'wsl.exe" "-d" "Ubuntu"' in shim.read_text(encoding="utf-8")
+        assert "Windows PATH shim (WSL):" in result.output
+        assert "No AI coding tools detected" in result.output
+
+    def test_setup_wsl_mirrors_claude_commands(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        package_root = tmp_path / "prefxplain"
+        cmd_dir = package_root / "commands"
+        agent_dir = package_root / "agents"
+        cmd_dir.mkdir(parents=True)
+        agent_dir.mkdir(parents=True)
+        (cmd_dir / "prefxplain.md").write_text("prefxplain command", encoding="utf-8")
+        (cmd_dir / "prefxplain-update.md").write_text("prefxplain update", encoding="utf-8")
+        (agent_dir / "prefxplain-worker.md").write_text("worker", encoding="utf-8")
+        windows_profile = tmp_path / "winuser"
+
+        monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+        monkeypatch.setattr(cli_mod.Path, "home", staticmethod(lambda: tmp_path / "linuxhome"))
+        monkeypatch.setattr(cli_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(cli_mod, "__file__", str(package_root / "cli.py"), raising=False)
+        monkeypatch.setattr(cli_mod, "_windows_user_profile_from_wsl", lambda: windows_profile)
+        monkeypatch.setattr(cli_mod, "_prefxplain_executable_for_wsl", lambda: "/usr/bin/prefxplain")
+
+        result = runner.invoke(app, ["setup", "claude-code"])
+
+        assert result.exit_code == 0, result.output
+        assert (windows_profile / ".claude" / "commands" / "prefxplain.md").exists()
+        assert (windows_profile / ".claude" / "commands" / "prefxplain-update.md").exists()
+        assert (windows_profile / ".claude" / "agents" / "prefxplain-worker.md").exists()
+        assert "Claude Code (Windows via WSL):" in result.output
 
     def test_setup_autodetect_skips_codex_and_prints_project_note(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -524,7 +631,7 @@ class TestEdgeCases:
 
     def test_html_is_self_contained(self, py_project: Path) -> None:
         runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
-        html = (py_project / "prefxplain.html").read_text()
+        html = generated_artifact(py_project, ".html").read_text()
         assert "<script>" in html
         assert "<style>" in html
         # No external CDN references
