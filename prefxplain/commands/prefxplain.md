@@ -7,19 +7,21 @@ allowed-tools: Bash, Read, Edit
 
 # prefxplain
 
-Produces `prefxplain.html` -- an interactive, self-contained map of the codebase.
+Produces `.prefxplain/<commit>/prefxplain.html` -- an interactive,
+self-contained map of the codebase.
 Nodes are files, edges are imports, and each node carries a 1-2 sentence
 natural-language description written by you (the LLM running this skill).
 
-**Smart re-runs**: if `prefxplain.json` already exists, descriptions, titles,
-flowcharts, groups, and highlights from the previous run are preserved for
-files that still exist. If the path you pass points to a wrapper folder that
-sits one level above the actual project (e.g. a monorepo root), step 1b will
-look up to 3 levels deep for a nested `prefxplain.json` and auto-promote
-`$REPO` to that project, so prior descriptions are reused instead of
-regenerated. Only new or previously-undescribed files need work. This makes
-re-running cheap. Exception: if `$LEVEL` changes between runs (e.g. the user
-ran `/prefxplain newbie` yesterday and `/prefxplain expert` today),
+**Smart re-runs**: if `.prefxplain/latest` points at a previous
+`prefxplain.json` artifact, descriptions, titles, flowcharts, groups, and highlights
+from that run are preserved for files that still exist. If the path you pass
+points to a wrapper folder that sits one level above the actual project
+(e.g. a monorepo root), step 1b will look up to 4 levels deep for a nested
+PrefXplain artifact and auto-promote `$REPO` to that project, so prior
+descriptions are reused instead of regenerated. Only new or
+previously-undescribed files need work. This makes re-running cheap.
+Exception: if `$LEVEL` changes between runs (e.g. the user ran
+`/prefxplain newbie` yesterday and `/prefxplain expert` today),
 descriptions are re-generated in the new voice.
 
 ## Bootstrap
@@ -165,8 +167,8 @@ Examples:
 - `/prefxplain expert` → `$LEVEL=expert`, `$REPO=.`
 - `/prefxplain newbie /path/to/repo` → `$LEVEL=newbie`, `$REPO=/path/to/repo`
 - `/prefxplain /path/to/repo` → `$LEVEL=""`, `$REPO=/path/to/repo`
-- `/prefxplain lewm-project` (with `lewm-project/le-wm/prefxplain.json` already
-  existing) → parsing sets `$REPO=lewm-project`, then step 1b detects the
+- `/prefxplain lewm-project` (with `lewm-project/le-wm/.prefxplain/latest`
+  already existing) → parsing sets `$REPO=lewm-project`, then step 1b detects the
   nested analysis and promotes `$REPO=lewm-project/le-wm` so prior
   descriptions are preserved instead of regenerated
 
@@ -180,21 +182,22 @@ What each level means (use this for step 4c's voice):
 - **expert** — domain specialist. Skip introductions. Lead with what is
   unusual or decision-carrying. Precise vocabulary, no padding.
 
-### 1b. Locate an existing prefxplain.json if $REPO doesn't contain one
+### 1b. Locate an existing PrefXplain artifact if $REPO doesn't contain one
 
 If the user passes a path that is one level above the actual project folder
 (e.g. a workspace with several projects, or they typed the parent by mistake),
-the existing `prefxplain.json` won't be at `$REPO/prefxplain.json` and step 2
-would wipe all prior work and re-describe every file from scratch. That is
-exactly what "smart re-runs" is meant to avoid, so always reconcile `$REPO`
-with the nearest existing analysis before touching the analyzer.
+the existing `.prefxplain/latest` marker won't be under `$REPO` and step 2
+would miss the prior run. That is exactly what "smart re-runs" is meant to
+avoid, so always reconcile `$REPO` with the nearest existing analysis before
+touching the analyzer.
 
-Before running the analyzer, verify whether `$REPO/prefxplain.json` exists.
-If not, do a shallow search (depth 3, excluding heavy dirs):
+Before running the analyzer, verify whether `$REPO/.prefxplain/latest` exists
+or a legacy `$REPO/prefxplain.json` exists. If not, do a shallow search
+(depth 4, excluding heavy dirs):
 
 ```bash
-if [ ! -f "$REPO/prefxplain.json" ]; then
-  find "$REPO" -maxdepth 3 -type f -name prefxplain.json \
+if [ ! -f "$REPO/.prefxplain/latest" ] && [ ! -f "$REPO/prefxplain.json" ]; then
+  find "$REPO" -maxdepth 4 -type f -name prefxplain.json \
     -not -path '*/node_modules/*' \
     -not -path '*/.git/*' \
     -not -path '*/.venv/*' \
@@ -207,20 +210,28 @@ fi
 
 Interpret the output:
 - **No matches** → leave `$REPO` unchanged. First-time analysis.
-- **Exactly one match** → set `$REPO` to the directory of that match (the
-  parent of the `prefxplain.json` file) and tell the user: *"Found existing
-  prefxplain.json at `<path>`. Treating that folder as the repo root to
-  preserve prior descriptions."*
+- **Exactly one match under `.prefxplain/<version>/prefxplain.json`** → set
+  `$REPO` to the directory above `.prefxplain` and tell the user: *"Found
+  existing PrefXplain artifacts at `<path>`. Treating that folder as the repo
+  root to preserve prior descriptions."*
+- **Exactly one legacy match at `<repo>/prefxplain.json`** → set `$REPO` to the
+  parent of that `prefxplain.json` file and tell the user the same thing.
 - **Multiple matches** → STOP. List the candidate directories and ask which
   one to update. Example:
   > I see multiple existing analyses under `$REPO`:
-  > - `/workspace/lewm-project/le-wm/prefxplain.json`
-  > - `/workspace/lewm-project/web-ui/prefxplain.json`
+  > - `/workspace/lewm-project/le-wm/.prefxplain/abc123/prefxplain.json`
+  > - `/workspace/lewm-project/web-ui/.prefxplain/def456/prefxplain.json`
   >
   > Which one should I update? (reply with the path, or "all fresh" to
   > re-analyze the parent from scratch)
 
 Once `$REPO` is finalized, continue to step 2 with the adjusted value.
+Before any later Bash block, canonicalize it once so artifact paths keep
+working after snippets `cd` into `.prefxplain/<commit>`:
+
+```bash
+REPO="$(cd "$REPO" && pwd)"
+```
 
 ### 2. Analyze and save JSON (preserving previous descriptions)
 
@@ -231,13 +242,18 @@ so step 4c re-writes them in the new voice.
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && LEVEL="$LEVEL" "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" LEVEL="$LEVEL" "$PPY" -c "
 import os
 from pathlib import Path
 from prefxplain.analyzer import analyze
 from prefxplain.graph import Graph
 
-root = Path('.')
+root = Path(os.environ['REPO_ROOT'])
+artifact = Path('.')
 graph = analyze(root, max_files=500)
 
 requested_level = (os.environ.get('LEVEL') or '').strip().lower()
@@ -246,7 +262,7 @@ if requested_level and requested_level not in valid_levels:
     requested_level = ''
 
 # Preserve descriptions, titles, flowcharts, groups, and highlights from previous run
-prev = root / 'prefxplain.json'
+prev = artifact / 'prefxplain.json'
 prior_level = ''
 if prev.exists():
     old = Graph.load(prev)
@@ -287,7 +303,7 @@ else:
 
 graph.metadata.level = effective_level
 
-graph.save(root / 'prefxplain.json')
+graph.save(artifact / 'prefxplain.json')
 described = sum(1 for n in graph.nodes if n.description)
 print(f'FILES: {len(graph.nodes)}')
 print(f'EDGES: {len(graph.edges)}')
@@ -345,7 +361,11 @@ Patch the groups into the JSON:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -381,7 +401,11 @@ assigned to a group. Group names should be human-readable, 1-3 words.
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" -c "
 import json
 g = json.loads(open('prefxplain.json').read())
 for n in g['nodes']:
@@ -704,7 +728,7 @@ the flowchart `label` / `description` fields below:
    - GOOD (branch-and-merge with concrete identifiers):
      ```
      Start
-       → Load prefxplain.json from repo root
+      → Load prefxplain.json from the artifact directory
        → JSON exists AND $LEVEL matches prior run?
          ├─ yes → Preserve prior descriptions and flowcharts
          └─ no  → Clear descriptions so step 4c re-writes them
@@ -794,7 +818,11 @@ After writing descriptions for a batch, run this script with the dict filled in:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -853,7 +881,11 @@ After all batches, verify nothing was missed:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" -c "
 import json
 g = json.loads(open('prefxplain.json').read())
 missing = [n['id'] for n in g['nodes'] if not n.get('description')]
@@ -883,7 +915,11 @@ Style (same constraints as file highlights):
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -915,7 +951,11 @@ First, find which groups have standalone files:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" -c "
 import json
 g = json.loads(open('prefxplain.json').read())
 sources = {e['source'] for e in g['edges']}
@@ -948,7 +988,11 @@ Each category needs:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph, GroupSummary, StandaloneCategory
 
@@ -1011,7 +1055,11 @@ First, collect the structural signals you need. Run:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" -c "
 import json
 from collections import Counter
 g = json.loads(open('prefxplain.json').read())
@@ -1071,7 +1119,11 @@ Patch them into the JSON:
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -1095,7 +1147,11 @@ any project, rewrite it.
 
 ```bash
 PPY="$HOME/.prefxplain/.venv/bin/python"; [ -x "$PPY" ] || PPY="$(command -v python3 || command -v python)"
-cd $REPO && "$PPY" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PPY" -c "
 from pathlib import Path
 from prefxplain.graph import Graph
 from prefxplain.renderer import render
@@ -1115,8 +1171,9 @@ If `--output` was passed in `$ARGUMENTS`, use that path instead of the default.
 Open the generated HTML in the installed PrefXplain IDE preview:
 
 ```bash
-HTML_ABS="$REPO/prefxplain.html"
-[ -f "$HTML_ABS" ] || HTML_ABS="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$REPO/prefxplain.html")"
+ARTIFACT_VERSION="$(cat "$REPO/.prefxplain/latest" 2>/dev/null || git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+HTML_ABS="$REPO/.prefxplain/$ARTIFACT_VERSION/prefxplain.html"
+[ -f "$HTML_ABS" ] || HTML_ABS="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$HTML_ABS")"
 IDE_SCHEME="$(python3 -c "
 import os
 term = (os.environ.get('TERM_PROGRAM') or '').lower().strip()
@@ -1180,8 +1237,9 @@ Don't preempt -- wait for the user to ask.
 
 - The HTML is self-contained, works offline, safe to share with non-technical
   stakeholders
-- `prefxplain.json` stays on disk so re-running `/prefxplain` only describes
-  new or changed files — previous descriptions are preserved automatically
+- `.prefxplain/<commit>/prefxplain.json` stays on disk so re-running
+  `/prefxplain` only describes new or changed files — previous descriptions
+  are preserved automatically
 - The HTML renderer already surfaces entry points, core files, orphans, and cycles
   visually -- the text report is a summary for people reading along in chat
 - The IDE extension preview is the default viewing path. Use a localhost server only

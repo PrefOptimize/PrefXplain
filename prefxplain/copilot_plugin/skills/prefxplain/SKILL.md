@@ -7,15 +7,17 @@ allowed-tools: shell
 
 # prefxplain
 
-Produces `prefxplain.html` -- an interactive, self-contained map of the codebase.
+Produces `.prefxplain/<commit>/prefxplain.html` -- an interactive,
+self-contained map of the codebase.
 Nodes are files, edges are imports, and each node carries a 1-2 sentence
 natural-language description written by you (the LLM running this skill).
 
-**Smart re-runs**: if `prefxplain.json` already exists, descriptions, titles,
-flowcharts, groups, and highlights from the previous run are preserved for
-files that still exist. Only new or previously-undescribed files need work.
-This makes re-running cheap. Exception: if the user passes a `$LEVEL` that
-differs from the prior run, descriptions are re-generated in the new voice.
+**Smart re-runs**: if `.prefxplain/latest` points at a previous
+`prefxplain.json`, descriptions, titles, flowcharts, groups, and highlights
+from that run are preserved for files that still exist. Only new or
+previously-undescribed files need work. This makes re-running cheap.
+Exception: if the user passes a `$LEVEL` that differs from the prior run,
+descriptions are re-generated in the new voice.
 
 ## Bootstrap
 
@@ -126,6 +128,13 @@ first run.
 **Repo**: the next token (if any) is the path. Otherwise use the current
 working directory. Store as `$REPO`.
 
+Before any later Bash block, canonicalize `$REPO` so artifact paths keep
+working after snippets `cd` into `.prefxplain/<commit>`:
+
+```bash
+REPO="$(cd "$REPO" && pwd)"
+```
+
 What each level means (voice used in step 4c):
 - **newbie** — first-year CS student. Zero jargon. Plain verbs, concrete
   analogies. Explain what an outsider sees happening. *(default when unset)*
@@ -144,13 +153,18 @@ descriptions are preserved; otherwise descriptions are cleared so step 4c
 re-writes them in the new voice.
 
 ```bash
-cd $REPO && LEVEL="$LEVEL" "$PREFXPLAIN_PYTHON" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" LEVEL="$LEVEL" "$PREFXPLAIN_PYTHON" -c "
 import os
 from pathlib import Path
 from prefxplain.analyzer import analyze
 from prefxplain.graph import Graph
 
-root = Path('.')
+root = Path(os.environ['REPO_ROOT'])
+artifact = Path('.')
 graph = analyze(root, max_files=500)
 
 requested_level = (os.environ.get('LEVEL') or '').strip().lower()
@@ -159,7 +173,7 @@ if requested_level and requested_level not in valid_levels:
     requested_level = ''
 
 # Preserve descriptions, titles, flowcharts, groups, and highlights from previous run
-prev = root / 'prefxplain.json'
+prev = artifact / 'prefxplain.json'
 prior_level = ''
 if prev.exists():
     old = Graph.load(prev)
@@ -197,7 +211,7 @@ else:
 
 graph.metadata.level = effective_level
 
-graph.save(root / 'prefxplain.json')
+graph.save(artifact / 'prefxplain.json')
 described = sum(1 for n in graph.nodes if n.description)
 print(f'FILES: {len(graph.nodes)}')
 print(f'EDGES: {len(graph.edges)}')
@@ -250,7 +264,11 @@ Rules:
 Patch the groups into the JSON:
 
 ```bash
-cd $REPO && python3 << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -285,7 +303,11 @@ assigned to a group. Group names should be human-readable, 1-3 words.
 #### 4b. List undescribed nodes
 
 ```bash
-cd $REPO && "$PREFXPLAIN_PYTHON" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" -c "
 import json
 g = json.loads(open('prefxplain.json').read())
 for n in g['nodes']:
@@ -418,7 +440,11 @@ the flowchart `label` / `description` fields below:
 After writing descriptions for a batch, run this script with the dict filled in:
 
 ```bash
-cd $REPO && python3 << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -456,7 +482,11 @@ Do NOT leave the placeholder comment. Run once per batch. Save after each batch.
 After all batches, verify nothing was missed:
 
 ```bash
-cd $REPO && "$PREFXPLAIN_PYTHON" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" -c "
 import json
 g = json.loads(open('prefxplain.json').read())
 missing = [n['id'] for n in g['nodes'] if not n.get('description')]
@@ -475,7 +505,11 @@ within the group (e.g. "supports Claude Code + Codex + Copilot" from three
 sibling integration files, not from any single one).
 
 ```bash
-cd $REPO && python3 << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -502,7 +536,11 @@ and what devs read to understand a project in 30 seconds.
 First, collect the structural signals you need. Run:
 
 ```bash
-cd $REPO && "$PREFXPLAIN_PYTHON" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" -c "
 import json
 from collections import Counter
 g = json.loads(open('prefxplain.json').read())
@@ -561,7 +599,11 @@ files to write:
 Patch them into the JSON:
 
 ```bash
-cd $REPO && python3 << 'PYEOF'
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" << 'PYEOF'
 from pathlib import Path
 from prefxplain.graph import Graph
 
@@ -584,7 +626,11 @@ any project, rewrite it.
 ### 5. Render the final HTML
 
 ```bash
-cd $REPO && "$PREFXPLAIN_PYTHON" -c "
+ARTIFACT_VERSION="$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+ARTIFACT_DIR="$REPO/.prefxplain/$ARTIFACT_VERSION"
+mkdir -p "$ARTIFACT_DIR"
+printf '%s\n' "$ARTIFACT_VERSION" > "$REPO/.prefxplain/latest"
+cd "$ARTIFACT_DIR" && REPO_ROOT="$REPO" "$PREFXPLAIN_PYTHON" -c "
 from pathlib import Path
 from prefxplain.graph import Graph
 from prefxplain.renderer import render
@@ -604,7 +650,8 @@ If the user passed `--output path`, use that path instead of the default.
 Open the generated HTML in the installed PrefXplain IDE preview:
 
 ```bash
-HTML_PATH="$(cd "$REPO" && python3 -c "from pathlib import Path; print(Path('${OUTPUT:-prefxplain.html}').resolve())")"
+ARTIFACT_VERSION="$(cat "$REPO/.prefxplain/latest" 2>/dev/null || git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo working-tree)"
+HTML_PATH="$REPO/.prefxplain/$ARTIFACT_VERSION/prefxplain.html"
 # All VS Code family IDEs (Cursor, Windsurf, Antigravity, Trae, Void,
 # VSCodium, Positron, …) follow Microsoft's convention: the URI scheme is
 # literally the IDE name. So `TERM_PROGRAM` is usually the right scheme.
@@ -687,8 +734,9 @@ Don't preempt -- wait for the user to ask.
 
 - The HTML is self-contained, works offline, safe to share with non-technical
   stakeholders
-- `prefxplain.json` stays on disk so re-running `/prefxplain` only describes
-  new or changed files — previous descriptions are preserved automatically
+- `.prefxplain/<commit>/prefxplain.json` stays on disk so re-running
+  `/prefxplain` only describes new or changed files — previous descriptions
+  are preserved automatically
 - The HTML renderer already surfaces entry points, core files, orphans, and cycles
   visually -- the text report is a summary for people reading along in chat
 - The IDE extension preview is the default viewing path. Use a localhost server only
