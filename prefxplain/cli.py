@@ -174,14 +174,12 @@ def create(
     ollama_host: Optional[str] = typer.Option(
         None,
         "--ollama-host",
-        envvar="OLLAMA_HOST",
         help="Ollama host/IP/domain. Only used with --ollama.",
         show_default=False,
     ),
     ollama_port: Optional[int] = typer.Option(
         None,
         "--ollama-port",
-        envvar="OLLAMA_PORT",
         help="Ollama port. Only used with --ollama.",
         show_default=False,
     ),
@@ -330,14 +328,12 @@ def update(
     ollama_host: Optional[str] = typer.Option(
         None,
         "--ollama-host",
-        envvar="OLLAMA_HOST",
         help="Ollama host/IP/domain. Only used with --ollama.",
         show_default=False,
     ),
     ollama_port: Optional[int] = typer.Option(
         None,
         "--ollama-port",
-        envvar="OLLAMA_PORT",
         help="Ollama port. Only used with --ollama.",
         show_default=False,
     ),

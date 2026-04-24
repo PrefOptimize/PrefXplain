@@ -68,6 +68,15 @@ class TestCreateCommand:
         assert result.exit_code == 0
         assert "1 file" in result.output or "1 files" in result.output
 
+    def test_create_ignores_invalid_ollama_port_env_without_ollama(
+        self, py_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OLLAMA_PORT", "not-a-number")
+
+        result = runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
+
+        assert result.exit_code == 0, result.output
+
 
 # ---------------------------------------------------------------------------
 # Update command
@@ -91,6 +100,16 @@ class TestUpdateCommand:
         result = runner.invoke(app, ["update", str(py_project), "--no-descriptions", "--no-open"])
         assert result.exit_code == 0, result.output
         assert (py_project / "prefxplain.html").exists()
+
+    def test_update_ignores_invalid_ollama_port_env_without_ollama(
+        self, py_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
+        monkeypatch.setenv("OLLAMA_PORT", "not-a-number")
+
+        result = runner.invoke(app, ["update", str(py_project), "--no-descriptions", "--no-open"])
+
+        assert result.exit_code == 0, result.output
 
 
 # ---------------------------------------------------------------------------
