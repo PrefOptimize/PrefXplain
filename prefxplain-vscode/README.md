@@ -28,6 +28,29 @@ For Windsurf: `windsurf --install-extension prefxplain-vscode-0.1.0.vsix`
 
 Opens `prefxplain.html` from the current workspace root.
 
+`Cmd+Shift+P` > `PrefXplain: Generate diagram`
+
+Runs `prefxplain create <workspace> --no-open` and opens the generated preview.
+Generation options are read from VS Code settings.
+
+## Settings
+
+- `prefxplain.model` — value passed to `--model`
+- `prefxplain.ollama.enabled` — enables `--ollama`
+- `prefxplain.ollama.host` — value passed to `--ollama-host`
+- `prefxplain.ollama.port` — value passed to `--ollama-port`
+
+Example (`settings.json`):
+
+```json
+{
+  "prefxplain.model": "llama3.1:8b",
+  "prefxplain.ollama.enabled": true,
+  "prefxplain.ollama.host": "127.0.0.1",
+  "prefxplain.ollama.port": 11434
+}
+```
+
 ### From a URI (used by the skills)
 
 ```bash

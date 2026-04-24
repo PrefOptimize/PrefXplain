@@ -50,7 +50,7 @@ if [ ! -d "$VENV" ]; then
 fi
 
 "$VENV/bin/pip" install --quiet --upgrade pip >/dev/null
-"$VENV/bin/pip" install --quiet -e "$REPO_ROOT" >/dev/null
+"$VENV/bin/pip" install --quiet -e "$REPO_ROOT[llm]" >/dev/null
 echo "${GREEN}✓${NC} Installed prefxplain into $VENV"
 
 # 3. Expose `prefxplain` on PATH via a shim in ~/.local/bin.

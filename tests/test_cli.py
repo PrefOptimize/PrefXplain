@@ -34,6 +34,13 @@ def py_project(tmp_path: Path) -> Path:
 
 
 class TestCreateCommand:
+    def test_create_help_includes_ollama_flags(self) -> None:
+        result = runner.invoke(app, ["create", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--ollama" in result.output
+        assert "--ollama-host" in result.output
+        assert "--ollama-port" in result.output
+
     def test_create_produces_html(self, py_project: Path) -> None:
         result = runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
         assert result.exit_code == 0, result.output
@@ -68,6 +75,13 @@ class TestCreateCommand:
 
 
 class TestUpdateCommand:
+    def test_update_help_includes_ollama_flags(self) -> None:
+        result = runner.invoke(app, ["update", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--ollama" in result.output
+        assert "--ollama-host" in result.output
+        assert "--ollama-port" in result.output
+
     def test_update_after_create(self, py_project: Path) -> None:
         # First create
         runner.invoke(app, ["create", str(py_project), "--no-descriptions", "--no-open"])
