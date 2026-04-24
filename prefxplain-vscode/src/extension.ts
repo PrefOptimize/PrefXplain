@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { spawn } from "child_process";
 import * as vscode from "vscode";
 
 let currentPanel: vscode.WebviewPanel | undefined;
@@ -454,6 +455,81 @@ function toHtmlPath(input?: string | vscode.Uri): string | undefined {
   return typeof input === "string" ? input : input.fsPath;
 }
 
+type GenerateSettings = {
+  model: string;
+  ollamaEnabled: boolean;
+  ollamaHost: string;
+  ollamaPort: number;
+};
+
+function getGenerateSettings(): GenerateSettings {
+  const config = vscode.workspace.getConfiguration("prefxplain");
+  return {
+    model: String(config.get<string>("model") || "").trim(),
+    ollamaEnabled: Boolean(config.get<boolean>("ollama.enabled", false)),
+    ollamaHost: String(config.get<string>("ollama.host") || "").trim(),
+    ollamaPort: Number(config.get<number>("ollama.port", 11434)),
+  };
+}
+
+function buildGenerateArgs(workspaceRoot: string, settings: GenerateSettings): string[] {
+  const args = ["create", workspaceRoot, "--no-open"];
+  if (settings.model) {
+    args.push("--model", settings.model);
+  }
+  if (settings.ollamaEnabled) {
+    args.push("--ollama");
+    if (settings.ollamaHost) {
+      args.push("--ollama-host", settings.ollamaHost);
+    }
+    if (Number.isInteger(settings.ollamaPort) && settings.ollamaPort > 0) {
+      args.push("--ollama-port", String(settings.ollamaPort));
+    }
+  }
+  return args;
+}
+
+type GenerateResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+};
+
+function runPrefxplainGenerate(workspaceRoot: string, args: string[]): Promise<GenerateResult> {
+  return new Promise((resolve) => {
+    const child = spawn("prefxplain", args, {
+      cwd: workspaceRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (error) => {
+      resolve({ code: -1, stdout, stderr, error });
+    });
+    child.on("close", (code) => {
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
+  });
+}
+
+function compactProcessOutput(stdout: string, stderr: string): string {
+  const combined = `${stdout}\n${stderr}`.trim();
+  if (!combined) return "";
+  const lines = combined.split(/\r?\n/);
+  return lines.slice(Math.max(0, lines.length - 12)).join("\n");
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   // Cleanup on deactivation
   context.subscriptions.push({
@@ -495,6 +571,49 @@ export function activate(context: vscode.ExtensionContext): void {
         await openPreview(htmlPath);
       }
     )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("prefxplain.generate", async () => {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (!workspaceFolder) {
+        vscode.window.showErrorMessage(
+          "PrefXplain: open a workspace folder to generate a diagram."
+        );
+        return;
+      }
+
+      const workspaceRoot = workspaceFolder.uri.fsPath;
+      const args = buildGenerateArgs(workspaceRoot, getGenerateSettings());
+      const result = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "PrefXplain: generating diagram...",
+          cancellable: false,
+        },
+        async () => runPrefxplainGenerate(workspaceRoot, args)
+      );
+
+      if (result.error) {
+        const message = result.error.message || String(result.error);
+        vscode.window.showErrorMessage(
+          `PrefXplain: failed to start CLI (${message}). Ensure 'prefxplain' is on PATH.`
+        );
+        return;
+      }
+
+      if (result.code !== 0) {
+        const tail = compactProcessOutput(result.stdout, result.stderr);
+        const detail = tail ? `\n\n${tail}` : "";
+        vscode.window.showErrorMessage(
+          `PrefXplain: generation failed (exit ${result.code}).${detail}`
+        );
+        return;
+      }
+
+      await openPreview(path.join(workspaceRoot, "prefxplain.html"));
+      vscode.window.showInformationMessage("PrefXplain: diagram generated.");
+    })
   );
 
   // URI handler: vscode://prefxplain.prefxplain-vscode/preview?path=...

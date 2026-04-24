@@ -39,6 +39,37 @@ PATH entry. Re-run the same command to upgrade. For Codex (project-local), run
 
 > **Inside your AI coding tool?** Paste the line above and the agent runs it for you.
 
+## Local dev install (from this repo)
+
+If you cloned this repository and want to test it directly:
+
+```bash
+cd /path/to/PrefXplain
+./setup
+```
+
+This creates `./.venv`, installs PrefXplain in editable mode with LLM
+dependencies, adds a shim at `~/.local/bin/prefxplain`, and registers supported
+tool integrations via `prefxplain setup`.
+
+Verify:
+
+```bash
+which prefxplain
+prefxplain --version
+prefxplain create . --no-descriptions --no-open
+```
+
+Run tests from the repo root:
+
+```bash
+./.venv/bin/pip install -e ".[dev]"
+./.venv/bin/python -m pytest tests/ -q
+```
+
+To reset the local install, remove `~/.local/bin/prefxplain` and `./.venv`, then
+run `./setup` again.
+
 ## Use — 1 command
 
 Open your AI coding tool inside any repo and type:
@@ -101,6 +132,10 @@ prefxplain create . --no-descriptions  # offline, no LLM, still useful
 prefxplain check .                     # CI: fail on circular deps
 prefxplain mcp .                       # MCP server for AI agents
 prefxplain upgrade                     # pull the latest release from GitHub main
+
+# Local Ollama (OpenAI-compatible API, opt-in)
+prefxplain create . --ollama --model llama3.1:8b
+prefxplain create . --ollama --ollama-host 192.168.1.20 --ollama-port 11434 --model qwen2.5-coder:14b
 ```
 
 Force setup for a specific tool:
@@ -122,6 +157,10 @@ prefxplain setup codex   # per-repo
 | `--format` | `html` | `html`, `matrix`, `mermaid`, `dot` |
 | `--no-descriptions` | false | Skip LLM step |
 | `--api-key` | env | Override API key |
+| `--api-base` | — | Custom OpenAI-compatible base URL |
+| `--ollama` | false | Use Ollama at `http://127.0.0.1:11434/v1` |
+| `--ollama-host` | `OLLAMA_HOST` or `127.0.0.1` | Ollama host, only used with `--ollama` |
+| `--ollama-port` | `OLLAMA_PORT` or `11434` | Ollama port, only used with `--ollama` |
 | `--model` | `gpt-4o-mini` | LLM model |
 | `--max-files` | 500 | Analysis cap |
 | `--force`, `-f` | false | Regenerate all descriptions |

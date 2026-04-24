@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from prefxplain.describer import (
+    ANTHROPIC_BASE,
     _content_hash,
     _file_preview,
     _get_cached,
     _init_cache,
     _make_prompt,
+    _resolve_client_config,
     _set_cached,
     describe,
 )
@@ -58,6 +60,72 @@ def graph_with_nodes(tmp_path: Path) -> tuple[Graph, Path]:
         )
     )
     return graph, tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Client configuration
+# ---------------------------------------------------------------------------
+
+
+class TestClientConfig:
+    def test_default_anthropic_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("OLLAMA_PORT", raising=False)
+
+        key, base = _resolve_client_config(api_key=None, api_base=None)
+
+        assert key == "anthropic-key"
+        assert base == ANTHROPIC_BASE
+
+    def test_ollama_env_alone_does_not_change_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+        monkeypatch.setenv("OLLAMA_HOST", "localhost")
+        monkeypatch.setenv("OLLAMA_PORT", "11434")
+
+        key, base = _resolve_client_config(api_key=None, api_base=None)
+
+        assert key == "openai-key"
+        assert base is None
+
+    def test_ollama_default_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("OLLAMA_PORT", raising=False)
+
+        key, base = _resolve_client_config(api_key=None, api_base=None, ollama=True)
+
+        assert key == "ollama"
+        assert base == "http://127.0.0.1:11434/v1"
+
+    def test_ollama_custom_host_and_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OLLAMA_API_KEY", "local-key")
+
+        key, base = _resolve_client_config(
+            api_key=None,
+            api_base=None,
+            ollama=True,
+            ollama_host="192.168.1.20",
+            ollama_port=11435,
+        )
+
+        assert key == "local-key"
+        assert base == "http://192.168.1.20:11435/v1"
+
+    def test_non_ollama_api_base_is_respected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+        key, base = _resolve_client_config(
+            api_key=None,
+            api_base="https://llm.example.test/v1",
+        )
+
+        assert key == "anthropic-key"
+        assert base == "https://llm.example.test/v1"
 
 
 # ---------------------------------------------------------------------------

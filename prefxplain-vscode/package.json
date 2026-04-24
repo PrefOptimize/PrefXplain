@@ -11,6 +11,7 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onCommand:prefxplain.preview",
+    "onCommand:prefxplain.generate",
     "onUri"
   ],
   "contributes": {
@@ -18,8 +19,39 @@
       {
         "command": "prefxplain.preview",
         "title": "PrefXplain: Preview diagram"
+      },
+      {
+        "command": "prefxplain.generate",
+        "title": "PrefXplain: Generate diagram"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "PrefXplain",
+      "properties": {
+        "prefxplain.model": {
+          "type": "string",
+          "default": "",
+          "description": "LLM model name passed to prefxplain via --model."
+        },
+        "prefxplain.ollama.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use Ollama via --ollama when generating a diagram from VS Code."
+        },
+        "prefxplain.ollama.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Ollama host/IP/domain passed via --ollama-host."
+        },
+        "prefxplain.ollama.port": {
+          "type": "number",
+          "default": 11434,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Ollama port passed via --ollama-port."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
